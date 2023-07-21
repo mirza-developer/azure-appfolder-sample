@@ -1,0 +1,74 @@
+﻿@page "/"
+@page "/home"
+@using Microsoft.Graph;
+@using System.IO;
+@inject GraphServiceClient GraphClient
+
+<InputFile OnChange="@HandleFileSelection" />
+<button @onclick="ReadFile">Read File</button>
+
+@if (!string.IsNullOrEmpty(fileContent))
+{
+    <div>@fileContent</div>
+}
+
+@code {
+    private IBrowserFile? file;
+    private string? fileContent;
+
+    private void HandleFileSelection(InputFileChangeEventArgs e)
+    {
+        file = e.File;
+    }
+
+    private async Task ReadFile()
+    {
+        try
+        {
+            if (file != null)
+            {
+                using var stream = file.OpenReadStream();
+                var buffer = new byte[file.Size];
+                await stream.ReadAsync(buffer, 0, (int)file.Size);
+
+                using MemoryStream memoryStream = new();
+
+                await stream.CopyToAsync(memoryStream);
+
+                var newFolder = new DriveItem()
+                {
+                        Name = file.Name.Split('.')[0],
+                        Folder = new()
+                };
+
+                await GraphClient.Me.Drive.Special.AppRoot.Children.Request().AddAsync(newFolder);
+
+                DriveItemUploadableProperties props = new()
+                    {
+                        ODataType = null,
+                        AdditionalData = new Dictionary<string, object>
+                        {
+                            { "@microsoft.graph.conflictBehavior", "replace" }
+                        },
+                        Name = file.Name
+                    };
+
+                var uploadSession = await GraphClient.Me.Drive.Special.AppRoot.ItemWithPath(file.Name).CreateUploadSession(props).Request().PostAsync();
+
+                int maxSliceSize = 320 * 1024;
+
+                var fileUploadTask = new LargeFileUploadTask<DriveItem>(uploadSession, memoryStream, maxSliceSize);
+
+                var uploadResult = await fileUploadTask.UploadAsync();
+            }
+        }
+        catch (ServiceException ex)
+        {
+            Console.WriteLine($"Error uploading: {ex.ToString()}");
+        }
+        catch (Exception ex)
+        {
+
+        }
+    }
+}
